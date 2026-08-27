@@ -1,7 +1,6 @@
 # Add-ons Codes Exporter
 # Author: aostella
 
-import re
 from aqt import mw
 from aqt.qt import (
     QDialog,
@@ -13,10 +12,8 @@ from aqt.qt import (
     QPushButton,
     QApplication,
     QGroupBox,
-    QCheckBox,
-    Qt
 )
-from aqt.utils import tooltip, showInfo
+from aqt.utils import tooltip
 
 def get_installed_addons():
     """Retrieve installed add-ons and separate numeric AnkiWeb codes from local add-ons."""
@@ -52,8 +49,8 @@ class AddonCodesExportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Export Add-on Codes")
-        self.setMinimumWidth(550)
-        self.setMinimumHeight(420)
+        self.setMinimumWidth(500)
+        self.setMinimumHeight(380)
         
         self.numeric_addons, self.local_addons = get_installed_addons()
         self.codes = [item["code"] for item in self.numeric_addons]
@@ -64,6 +61,7 @@ class AddonCodesExportDialog(QDialog):
         layout = QVBoxLayout()
         self.setLayout(layout)
 
+        # Header Info
         header_text = f"Found <b>{len(self.codes)}</b> AnkiWeb add-on code(s) installed."
         if self.local_addons:
             header_text += f" ({len(self.local_addons)} custom/local add-on(s) excluded)."
@@ -72,36 +70,23 @@ class AddonCodesExportDialog(QDialog):
         header_label.setStyleSheet("font-size: 13px; margin-bottom: 5px;")
         layout.addWidget(header_label)
 
-        comma_group = QGroupBox("Comma-Separated Codes (for sharing / backup)")
-        comma_layout = QHBoxLayout()
+        # Single Clean Output Box (Space-separated for direct Anki paste)
+        codes_group = QGroupBox("Add-on Codes (Ready to paste into Anki)")
+        codes_layout = QHBoxLayout()
         
-        comma_str = ", ".join(self.codes) if self.codes else "No AnkiWeb add-ons found."
-        self.comma_edit = QLineEdit(comma_str)
-        self.comma_edit.setReadOnly(True)
-        comma_layout.addWidget(self.comma_edit)
+        codes_str = " ".join(self.codes) if self.codes else "No AnkiWeb add-ons found."
+        self.codes_edit = QLineEdit(codes_str)
+        self.codes_edit.setReadOnly(True)
+        codes_layout.addWidget(self.codes_edit)
 
-        copy_comma_btn = QPushButton("Copy")
-        copy_comma_btn.clicked.connect(lambda: self.copy_to_clipboard(comma_str, "Comma-separated codes copied!"))
-        comma_layout.addWidget(copy_comma_btn)
+        copy_btn = QPushButton("Copy")
+        copy_btn.clicked.connect(lambda: self.copy_to_clipboard(codes_str, "Add-on codes copied!"))
+        codes_layout.addWidget(copy_btn)
         
-        comma_group.setLayout(comma_layout)
-        layout.addWidget(comma_group)
+        codes_group.setLayout(codes_layout)
+        layout.addWidget(codes_group)
 
-        space_group = QGroupBox("Space-Separated Codes (Anki bulk installer compatible)")
-        space_layout = QHBoxLayout()
-        
-        space_str = " ".join(self.codes) if self.codes else "No AnkiWeb add-ons found."
-        self.space_edit = QLineEdit(space_str)
-        self.space_edit.setReadOnly(True)
-        space_layout.addWidget(self.space_edit)
-
-        copy_space_btn = QPushButton("Copy")
-        copy_space_btn.clicked.connect(lambda: self.copy_to_clipboard(space_str, "Space-separated codes copied!"))
-        space_layout.addWidget(copy_space_btn)
-        
-        space_group.setLayout(space_layout)
-        layout.addWidget(space_group)
-
+        # Installed Add-ons Details Summary
         details_group = QGroupBox("Installed Add-ons Summary")
         details_layout = QVBoxLayout()
 
@@ -124,6 +109,7 @@ class AddonCodesExportDialog(QDialog):
         details_group.setLayout(details_layout)
         layout.addWidget(details_group)
 
+        # Bottom Close Button
         bottom_layout = QHBoxLayout()
         bottom_layout.addStretch()
 
