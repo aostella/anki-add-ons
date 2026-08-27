@@ -1,7 +1,7 @@
-# Anki Add-ons Collection
+# Anki Add-ons
 
-A collection of custom add-ons for Anki Desktop.
+My collection of simple Anki add-ons.
 
-## Available Add-ons
+## Add-ons list
 
-* 📦 **[Add-ons Codes Exporter](./add-ons-codes-exporter)**: Easily extract and copy all installed AnkiWeb add-on codes as comma-separated or space-separated strings.
+* **[Add-ons Codes Exporter](./add-ons-codes-exporter)**: Easily copy all your installed add-on codes to share or backup.
