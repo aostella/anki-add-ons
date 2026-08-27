@@ -1,3 +1,7 @@
-# Add-ons Codes Exporter
+# Anki Add-ons Collection
 
-An Anki 2.1+ add-on that extracts all your installed AnkiWeb add-on codes into a clean comma-separated or space-separated string for quick copying, backup, or transferring to another Anki setup.
+A collection of custom add-ons for Anki Desktop.
+
+## Available Add-ons
+
+* 📦 **[Add-ons Codes Exporter](./add-ons-codes-exporter)**: Easily extract and copy all installed AnkiWeb add-on codes as comma-separated or space-separated strings.
