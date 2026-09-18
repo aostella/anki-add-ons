@@ -9,7 +9,6 @@ from .exporter import export_today_words, export_selected_browser_words
 def setup_menus():
     # Tools menu in main window
     action = QAction("Export Today's Added Words", mw)
-    action.setShortcut("Ctrl+Alt+W")
     action.triggered.connect(export_today_words)
     mw.form.menuTools.addAction(action)
 

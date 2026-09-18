@@ -12,7 +12,7 @@ If you learn Japanese words every day and want to review or generate practice se
 
 ### From Main Menu
 1. Open Anki.
-2. Go to **Tools -> Export Today's Added Words** (or press `Ctrl+Alt+W` / `Cmd+Alt+W`).
+2. Go to **Tools -> Export Today's Added Words**.
 3. Choose your preferred comma style (`、` or `, `).
 4. Click **Copy to Clipboard**!
 
