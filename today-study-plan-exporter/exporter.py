@@ -5,6 +5,84 @@ from aqt.qt import (
 )
 from aqt.utils import tooltip, showInfo
 
+def get_studied_today():
+    try:
+        day_start = mw.col.sched.day_cutoff * 1000
+    except AttributeError:
+        day_start = mw.col.sched.dayCutoff * 1000
+
+    raw_studied = {}
+    
+    # 0 = learn, 1 = review, 2 = relearn, 3 = cram
+    # Cards introduced today (New cards studied today) -> type 0
+    new_studied = mw.col.db.all(f"""
+        select c.did, count(distinct r.cid)
+        from revlog r
+        join cards c on r.cid = c.id
+        where r.id >= {day_start} and r.type = 0
+        group by c.did
+    """)
+    
+    for did, count in new_studied:
+        if did not in raw_studied:
+            raw_studied[did] = {"new": 0, "review": 0}
+        raw_studied[did]["new"] += count
+        
+    # Cards reviewed today -> type 1, 2, 3
+    rev_studied = mw.col.db.all(f"""
+        select c.did, count(distinct r.cid)
+        from revlog r
+        join cards c on r.cid = c.id
+        where r.id >= {day_start} and r.type in (1, 2, 3)
+        group by c.did
+    """)
+    
+    for did, count in rev_studied:
+        if did not in raw_studied:
+            raw_studied[did] = {"new": 0, "review": 0}
+        raw_studied[did]["review"] += count
+
+    return raw_studied
+
+def get_total_studied(node, raw_studied):
+    did = getattr(node, 'deck_id', 0)
+    s_new = raw_studied.get(did, {}).get("new", 0)
+    s_review = raw_studied.get(did, {}).get("review", 0)
+    
+    for child in getattr(node, 'children', []):
+        c_new, c_review = get_total_studied(child, raw_studied)
+        s_new += c_new
+        s_review += c_review
+        
+    return s_new, s_review
+
+def build_flat_tree(node, raw_studied, level=0):
+    result = []
+    did = getattr(node, 'deck_id', 0)
+    
+    s_new, s_review = get_total_studied(node, raw_studied)
+    
+    p_new = getattr(node, 'new_count', 0)
+    p_learn = getattr(node, 'learn_count', 0)
+    p_review = getattr(node, 'review_count', 0)
+    
+    if did > 0:
+        result.append({
+            "name": node.name,
+            "id": did,
+            "level": level,
+            "new_total": p_new + s_new,
+            "review_total": p_review + p_learn + s_review,
+            "pending_new": p_new,
+            "pending_learn": p_learn,
+            "pending_due": p_review
+        })
+        
+    for child in getattr(node, 'children', []):
+        result.extend(build_flat_tree(child, raw_studied, level + 1 if did > 0 else level))
+        
+    return result
+
 class StudyPlanDialog(QDialog):
     def __init__(self, tree_nodes, parent=None):
         super().__init__(parent)
@@ -13,6 +91,10 @@ class StudyPlanDialog(QDialog):
         self.setMinimumWidth(550)
         self.setMinimumHeight(450)
         self.checkboxes = []
+        
+        self.addon_name = __name__.split('.')[0]
+        self.addon_config = mw.addonManager.getConfig(self.addon_name) or {}
+        
         self.init_ui()
 
     def init_ui(self):
@@ -22,22 +104,34 @@ class StudyPlanDialog(QDialog):
         info_label = QLabel("Select the decks to include in your study plan summary:")
         layout.addWidget(info_label)
 
+        # Merge subdecks toggle
+        self.merge_cb = QCheckBox("Merge subdecks into parent decks (Show top-level only)")
+        self.merge_cb.setChecked(self.addon_config.get("merge_subdecks", False))
+        self.merge_cb.stateChanged.connect(self.on_merge_toggled)
+        layout.addWidget(self.merge_cb)
+
         # Decks Scroll Area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
         
+        has_run_before = self.addon_config.get("has_run_before", False)
+        saved_decks = self.addon_config.get("selected_decks", [])
+        
         for node in self.tree_nodes:
-            cb = QCheckBox(f"{node['name']}  (New: {node['new']}, Learn: {node['learn']}, Due: {node['review']})")
+            # Checkbox label shows the calculated totals
+            cb = QCheckBox(f"{node['name']}  (Total New: {node['new_total']}, Total Due: {node['review_total']})")
             cb.setStyleSheet(f"margin-left: {node['level'] * 20}px;")
-            # Default to checked only for decks that have cards due
-            if node['new'] > 0 or node['learn'] > 0 or node['review'] > 0:
-                cb.setChecked(True)
+            
+            if not has_run_before:
+                # First time: check if has any cards
+                cb.setChecked(node['new_total'] > 0 or node['review_total'] > 0)
             else:
-                cb.setChecked(False)
+                cb.setChecked(node['id'] in saved_decks)
+                
             cb.node_data = node
-            cb.stateChanged.connect(self.update_text)
+            cb.stateChanged.connect(self.on_checkbox_changed)
             self.checkboxes.append(cb)
             scroll_layout.addWidget(cb)
             
@@ -69,15 +163,48 @@ class StudyPlanDialog(QDialog):
         
         layout.addLayout(btn_layout)
         
+        self.apply_merge_visibility()
         self.update_text()
+
+    def on_merge_toggled(self):
+        self.addon_config["merge_subdecks"] = self.merge_cb.isChecked()
+        self.save_config()
+        self.apply_merge_visibility()
+        self.update_text()
+        
+    def apply_merge_visibility(self):
+        is_merged = self.merge_cb.isChecked()
+        for cb in self.checkboxes:
+            if is_merged and cb.node_data['level'] > 0:
+                cb.setVisible(False)
+            else:
+                cb.setVisible(True)
+
+    def on_checkbox_changed(self):
+        selected = []
+        for cb in self.checkboxes:
+            if cb.isChecked():
+                selected.append(cb.node_data['id'])
+        self.addon_config["selected_decks"] = selected
+        self.addon_config["has_run_before"] = True
+        self.save_config()
+        self.update_text()
+        
+    def save_config(self):
+        mw.addonManager.writeConfig(self.addon_name, self.addon_config)
 
     def update_text(self):
         lines = []
+        is_merged = self.merge_cb.isChecked()
+        
         for cb in self.checkboxes:
+            node = cb.node_data
+            
+            if is_merged and node['level'] > 0:
+                continue
+                
             if cb.isChecked():
-                node = cb.node_data
-                # Format based on user's preference: "Deck: X reviewed, Y learned"
-                lines.append(f"{node['name']}: {node['review']} reviewed, {node['new']} learned")
+                lines.append(f"{node['name']}: {node['review_total']} reviewed, {node['new_total']} learned")
         
         self.text_edit.setPlainText("\n".join(lines))
 
@@ -91,31 +218,15 @@ class StudyPlanDialog(QDialog):
         clipboard.setText(content)
         tooltip("Study plan copied to clipboard!", period=2000)
 
-def extract_tree(node, level=0):
-    result = []
-    # In Anki 2.1+, root node might have deck_id == 0 or None.
-    # The actual decks have deck_id > 0
-    if getattr(node, 'deck_id', 0) > 0:
-        result.append({
-            "name": node.name,
-            "id": node.deck_id,
-            "level": level,
-            "new": getattr(node, 'new_count', 0),
-            "learn": getattr(node, 'learn_count', 0),
-            "review": getattr(node, 'review_count', 0)
-        })
-    for child in getattr(node, 'children', []):
-        result.extend(extract_tree(child, level + 1 if getattr(node, 'deck_id', 0) > 0 else level))
-    return result
-
 def export_study_plan():
     if not mw or not mw.col:
         return
     
-    # Refresh to ensure counts are accurate
-    mw.col.reset() 
+    mw.col.reset()
     tree = mw.col.sched.deck_due_tree()
-    nodes = extract_tree(tree)
+    raw_studied = get_studied_today()
+    
+    nodes = build_flat_tree(tree, raw_studied)
     
     if not nodes:
         showInfo("No decks found.")
