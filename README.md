@@ -10,5 +10,5 @@ My collection of simple Anki add-ons.
 ### Today's Study Plan Exporter
 AnkiWeb URL: (Not yet published)
 
-Generates a summary of your daily study plan based on pending new and review cards for selected decks.
+Generates a summary of your daily study plan (total new and due cards) for selected decks. It calculates the total workload for the entire day, meaning it still accurately shows your plan even if the cards have already been studied or reviewed.
 
