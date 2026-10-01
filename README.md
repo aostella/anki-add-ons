@@ -6,9 +6,4 @@ My collection of simple Anki add-ons.
 
 * **[Add-ons Codes Exporter](https://ankiweb.net/shared/info/320913726)**
 * **[Today's Words Exporter](https://ankiweb.net/shared/info/979975835)**
-
-### Today's Study Plan Exporter
-AnkiWeb URL: (Not yet published)
-
-Generates a summary of your daily study plan (total new and due cards) for selected decks. It calculates the total workload for the entire day, meaning it still accurately shows your plan even if the cards have already been studied or reviewed.
-
+* **[Today's Study Plan Exporter](https://ankiweb.net/shared/info/907054283)**
