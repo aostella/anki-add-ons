@@ -7,14 +7,24 @@ from aqt.utils import tooltip, showInfo
 
 def get_studied_today():
     try:
-        day_start = mw.col.sched.day_cutoff * 1000
+        # Anki 2.1+ dayCutoff is the end of the day.
+        day_start = (mw.col.sched.day_cutoff - 86400) * 1000
     except AttributeError:
-        day_start = mw.col.sched.dayCutoff * 1000
+        try:
+            day_start = (mw.col.sched.dayCutoff - 86400) * 1000
+        except AttributeError:
+            import time
+            t = time.localtime()
+            day_start = int(time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 4, 0, 0, t.tm_wday, t.tm_yday, t.tm_isdst))) * 1000
+
+    try:
+        today = mw.col.sched.today
+    except AttributeError:
+        today = 0 # Fallback, might cause minor inaccuracy if missing, but usually exists.
 
     raw_studied = {}
     
-    # 0 = learn, 1 = review, 2 = relearn, 3 = cram
-    # Cards introduced today (New cards studied today) -> type 0
+    # 1. New cards studied today
     new_studied = mw.col.db.all(f"""
         select c.did, count(distinct r.cid)
         from revlog r
@@ -25,42 +35,66 @@ def get_studied_today():
     
     for did, count in new_studied:
         if did not in raw_studied:
-            raw_studied[did] = {"new": 0, "review": 0}
-        raw_studied[did]["new"] += count
+            raw_studied[did] = {"s_new": 0, "s_rev": 0, "s_lfn": 0}
+        raw_studied[did]["s_new"] += count
         
-    # Cards reviewed today -> type 1, 2, 3
+    # 2. Review cards studied today that are NO LONGER pending today
+    # (queue 2 = review, queue 3 = day learn, queue 4 = buried, -1 = suspended)
     rev_studied = mw.col.db.all(f"""
         select c.did, count(distinct r.cid)
         from revlog r
         join cards c on r.cid = c.id
         where r.id >= {day_start} and r.type in (1, 2, 3)
+        and (
+            (c.queue = 2 and c.due > {today}) or 
+            (c.queue = 3 and c.due > {today}) or 
+            c.queue in (4, -1)
+        )
         group by c.did
     """)
     
     for did, count in rev_studied:
         if did not in raw_studied:
-            raw_studied[did] = {"new": 0, "review": 0}
-        raw_studied[did]["review"] += count
+            raw_studied[did] = {"s_new": 0, "s_rev": 0, "s_lfn": 0}
+        raw_studied[did]["s_rev"] += count
+
+    # 3. Cards that were introduced today but are STILL pending learn today
+    # We subtract these from the review_total so they don't inflate the review counts!
+    learn_from_new = mw.col.db.all(f"""
+        select c.did, count(distinct r.cid)
+        from revlog r
+        join cards c on r.cid = c.id
+        where r.id >= {day_start} and r.type = 0
+        and c.queue in (1, 3) and c.due <= {today}
+        group by c.did
+    """)
+    
+    for did, count in learn_from_new:
+        if did not in raw_studied:
+            raw_studied[did] = {"s_new": 0, "s_rev": 0, "s_lfn": 0}
+        raw_studied[did]["s_lfn"] += count
 
     return raw_studied
 
 def get_total_studied(node, raw_studied):
     did = getattr(node, 'deck_id', 0)
-    s_new = raw_studied.get(did, {}).get("new", 0)
-    s_review = raw_studied.get(did, {}).get("review", 0)
+    s_new = raw_studied.get(did, {}).get("s_new", 0)
+    s_rev = raw_studied.get(did, {}).get("s_rev", 0)
+    s_lfn = raw_studied.get(did, {}).get("s_lfn", 0)
     
     for child in getattr(node, 'children', []):
-        c_new, c_review = get_total_studied(child, raw_studied)
+        c_new, c_rev, c_lfn = get_total_studied(child, raw_studied)
         s_new += c_new
-        s_review += c_review
+        s_rev += c_rev
+        s_lfn += c_lfn
         
-    return s_new, s_review
+    return s_new, s_rev, s_lfn
 
 def build_flat_tree(node, raw_studied, level=0):
     result = []
     did = getattr(node, 'deck_id', 0)
     
-    s_new, s_review = get_total_studied(node, raw_studied)
+    s_new, s_rev, s_lfn = get_total_studied(node, raw_studied)
     
     p_new = getattr(node, 'new_count', 0)
     p_learn = getattr(node, 'learn_count', 0)
@@ -71,11 +105,10 @@ def build_flat_tree(node, raw_studied, level=0):
             "name": node.name,
             "id": did,
             "level": level,
+            # Initial New = Pending New + New Studied
             "new_total": p_new + s_new,
-            "review_total": p_review + p_learn + s_review,
-            "pending_new": p_new,
-            "pending_learn": p_learn,
-            "pending_due": p_review
+            # Initial Review = Pending Review + Pending Learn + Completed Reviews - (Pending Learn that were New today)
+            "review_total": p_review + p_learn + s_rev - s_lfn,
         })
         
     for child in getattr(node, 'children', []):
@@ -104,13 +137,11 @@ class StudyPlanDialog(QDialog):
         info_label = QLabel("Select the decks to include in your study plan summary:")
         layout.addWidget(info_label)
 
-        # Merge subdecks toggle
         self.merge_cb = QCheckBox("Merge subdecks into parent decks (Show top-level only)")
         self.merge_cb.setChecked(self.addon_config.get("merge_subdecks", False))
         self.merge_cb.stateChanged.connect(self.on_merge_toggled)
         layout.addWidget(self.merge_cb)
 
-        # Decks Scroll Area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll_content = QWidget()
@@ -120,12 +151,10 @@ class StudyPlanDialog(QDialog):
         saved_decks = self.addon_config.get("selected_decks", [])
         
         for node in self.tree_nodes:
-            # Checkbox label shows the calculated totals
             cb = QCheckBox(f"{node['name']}  (Total New: {node['new_total']}, Total Due: {node['review_total']})")
             cb.setStyleSheet(f"margin-left: {node['level'] * 20}px;")
             
             if not has_run_before:
-                # First time: check if has any cards
                 cb.setChecked(node['new_total'] > 0 or node['review_total'] > 0)
             else:
                 cb.setChecked(node['id'] in saved_decks)
@@ -139,7 +168,6 @@ class StudyPlanDialog(QDialog):
         scroll.setWidget(scroll_content)
         layout.addWidget(scroll)
 
-        # Result Group
         output_group = QGroupBox("Result")
         output_layout = QVBoxLayout()
         self.text_edit = QTextEdit()
@@ -148,7 +176,6 @@ class StudyPlanDialog(QDialog):
         output_group.setLayout(output_layout)
         layout.addWidget(output_group)
 
-        # Buttons
         btn_layout = QHBoxLayout()
         copy_btn = QPushButton("Copy to Clipboard")
         copy_btn.setStyleSheet("font-weight: bold; padding: 6px 14px;")
@@ -199,10 +226,8 @@ class StudyPlanDialog(QDialog):
         
         for cb in self.checkboxes:
             node = cb.node_data
-            
             if is_merged and node['level'] > 0:
                 continue
-                
             if cb.isChecked():
                 lines.append(f"{node['name']}: {node['review_total']} reviewed, {node['new_total']} learned")
         
@@ -225,7 +250,6 @@ def export_study_plan():
     mw.col.reset()
     tree = mw.col.sched.deck_due_tree()
     raw_studied = get_studied_today()
-    
     nodes = build_flat_tree(tree, raw_studied)
     
     if not nodes:
